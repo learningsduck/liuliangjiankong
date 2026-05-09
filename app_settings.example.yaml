@@ -1,0 +1,2 @@
+# 已废弃：GB 进制改为在「编辑服务器」里按台配置（servers.yaml 中每项 gb_base: 1024 或 1000）。
+# 若仍存在旧的 app_settings.yaml，可删除；程序不再读取该文件。

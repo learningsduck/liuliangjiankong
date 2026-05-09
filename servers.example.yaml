@@ -1,0 +1,28 @@
+# 复制为 servers.yaml，与 exe 放在同一目录
+
+servers:
+  - id: bwg-example
+    name: 搬瓦工-示例
+    type: bandwagon
+    gb_base: 1024
+    veid: "1234567"
+    api_key: "your_kiwivm_api_key"
+
+  - id: hostdare-example
+    name: HostDare-示例
+    type: ssh_vnstat
+    gb_base: 1000
+    host: "203.0.113.10"
+    port: 22
+    username: root
+    private_key_path: "C:\\Users\\你的用户名\\.ssh\\id_rsa"
+    interface: eth0
+    # 也可写 monthly_quota_bytes；GUI 编辑时按 GB 输入会自动换算
+    monthly_quota_bytes: 3298534883328
+    # 可选：与面板对齐时由 GUI 自动写入（面板已用字节 − vnstat 原始已用字节）
+    # used_offset_bytes: 3543348019
+    billing_reset_day: 8
+    # 以下由程序自动维护，勿手改：
+    # billing_period_id: "2026-05-08"
+    # billing_cycle_baseline_used_bytes: 1234567890
+    # billing_cycle_needs_baseline: true

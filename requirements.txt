@@ -1,0 +1,4 @@
+httpx==0.28.1
+paramiko==3.5.1
+pyyaml==6.0.2
+pyinstaller==6.13.0
