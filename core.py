@@ -634,72 +634,78 @@ def apply_used_offset(row: ServerRow, entry: dict[str, Any]) -> ServerRow:
     return replace(row, used_bytes=new_used, used_percent=pct)
 
 
-def collect_rows(entries: list[dict[str, Any]]) -> tuple[list[ServerRow], bool]:
-    rows: list[ServerRow] = []
-    entry_dirty = False
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        sid = str(entry.get("id") or "unknown")
-        name = str(entry.get("name") or sid)
-        stype = str(entry.get("type") or "").lower()
+def collect_one_row(entry: dict[str, Any]) -> tuple[ServerRow, bool]:
+    """采集单台服务器流量；返回 ``(行, 是否修改了 entry 内字段)``。供全量或按 ID 部分刷新复用。"""
+    sid = str(entry.get("id") or "unknown")
+    name = str(entry.get("name") or sid)
+    stype = str(entry.get("type") or "").lower()
 
-        if stype == "bandwagon":
-            veid = str(entry.get("veid") or "")
-            api_key = entry.get("api_key")
-            api_key_env = entry.get("api_key_env")
-            if api_key_env:
-                api_key = os.environ.get(str(api_key_env), "")
-            else:
-                api_key = str(api_key or "")
-            if not veid or not api_key:
-                rows.append(
-                    ServerRow(
-                        id=sid,
-                        name=name,
-                        type="bandwagon",
-                        ok=False,
-                        error="缺少 veid 或 api_key",
-                        used_bytes=None,
-                        quota_bytes=None,
-                        used_percent=None,
-                        reset_unix=None,
-                        detail=None,
-                        gb_base=entry_gb_base(entry),
-                    )
-                )
-                continue
-            r = fetch_bandwagon(veid, api_key)
-            r = replace(r, id=sid, name=name, gb_base=entry_gb_base(entry))
-            raw = r.used_bytes if r.ok else None
-            r = apply_used_offset(r, entry)
-            rows.append(replace(r, raw_used_bytes=raw))
-
-        elif stype in ("ssh_vnstat", "vnstat_ssh"):
-            r = fetch_ssh_vnstat(entry)
-            r = replace(r, gb_base=entry_gb_base(entry))
-            raw = r.used_bytes if r.ok else None
-            r = apply_used_offset(r, entry)
-            r, sub_dirty = apply_ssh_billing_cycle_to_row(entry, r, raw)
-            entry_dirty = entry_dirty or sub_dirty
-            rows.append(r)
-
+    if stype == "bandwagon":
+        veid = str(entry.get("veid") or "")
+        api_key = entry.get("api_key")
+        api_key_env = entry.get("api_key_env")
+        if api_key_env:
+            api_key = os.environ.get(str(api_key_env), "")
         else:
-            rows.append(
+            api_key = str(api_key or "")
+        if not veid or not api_key:
+            return (
                 ServerRow(
                     id=sid,
                     name=name,
-                    type=stype or "unknown",
+                    type="bandwagon",
                     ok=False,
-                    error=f"未知 type: {stype}",
+                    error="缺少 veid 或 api_key",
                     used_bytes=None,
                     quota_bytes=None,
                     used_percent=None,
                     reset_unix=None,
                     detail=None,
                     gb_base=entry_gb_base(entry),
-                )
+                ),
+                False,
             )
+        r = fetch_bandwagon(veid, api_key)
+        r = replace(r, id=sid, name=name, gb_base=entry_gb_base(entry))
+        raw = r.used_bytes if r.ok else None
+        r = apply_used_offset(r, entry)
+        return replace(r, raw_used_bytes=raw), False
+
+    if stype in ("ssh_vnstat", "vnstat_ssh"):
+        r = fetch_ssh_vnstat(entry)
+        r = replace(r, gb_base=entry_gb_base(entry))
+        raw = r.used_bytes if r.ok else None
+        r = apply_used_offset(r, entry)
+        r, sub_dirty = apply_ssh_billing_cycle_to_row(entry, r, raw)
+        return r, sub_dirty
+
+    return (
+        ServerRow(
+            id=sid,
+            name=name,
+            type=stype or "unknown",
+            ok=False,
+            error=f"未知 type: {stype}",
+            used_bytes=None,
+            quota_bytes=None,
+            used_percent=None,
+            reset_unix=None,
+            detail=None,
+            gb_base=entry_gb_base(entry),
+        ),
+        False,
+    )
+
+
+def collect_rows(entries: list[dict[str, Any]]) -> tuple[list[ServerRow], bool]:
+    rows: list[ServerRow] = []
+    entry_dirty = False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        r, d = collect_one_row(entry)
+        entry_dirty = entry_dirty or d
+        rows.append(r)
     return rows, entry_dirty
 
 

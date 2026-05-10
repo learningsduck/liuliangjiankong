@@ -21,6 +21,7 @@ from core import (
     apply_used_offset,
     billing_cycle_start_date,
     bytes_to_gb_str,
+    collect_one_row,
     collect_rows,
     entry_gb_base,
     fetch_ssh_vnstat,
@@ -316,8 +317,10 @@ class App:
         top = ttk.Frame(root, padding=8)
         top.pack(fill=tk.X)
 
-        self.btn_refresh = ttk.Button(top, text="刷新", command=lambda: self.refresh(False))
+        self.btn_refresh = ttk.Button(top, text="刷新", command=lambda: self.refresh_selected(False))
         self.btn_refresh.pack(side=tk.LEFT, padx=(0, 5))
+        self.btn_refresh_all = ttk.Button(top, text="全部刷新", command=lambda: self.refresh_all(False))
+        self.btn_refresh_all.pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(top, text="新增", command=self.add_server).pack(side=tk.LEFT, padx=5)
         ttk.Button(top, text="编辑", command=self.edit_server).pack(side=tk.LEFT, padx=5)
         ttk.Button(top, text="删除", command=self.delete_server).pack(side=tk.LEFT, padx=5)
@@ -381,7 +384,7 @@ class App:
         scroll.grid(row=0, column=1, sticky="ns")
 
         self.load_entries()
-        self.refresh(False)
+        self.refresh_all(False)
 
     def _move_selected_row(self, delta: int) -> None:
         """在 servers.yaml 中调整服务器顺序（整行一起移动），并立即重绘列表。"""
@@ -405,7 +408,7 @@ class App:
             self.render_rows(new_rows)
             self._select_tree_row_by_id(sid)
         else:
-            self.refresh(False)
+            self.refresh_all(False)
 
     def _select_tree_row_by_id(self, sid: str) -> None:
         for item in self.tree.get_children():
@@ -427,6 +430,10 @@ class App:
         save_servers(self.path, self.entries)
 
     def selected_id(self) -> str | None:
+        sel = self.tree.selection()
+        if sel:
+            vals = self.tree.item(sel[0], "values")
+            return str(vals[0]) if vals else None
         item = self.tree.focus()
         if not item:
             return None
@@ -457,7 +464,7 @@ class App:
             return
         self.entries.append(dlg.result)
         self.save_entries()
-        self.refresh(False)
+        self.refresh_ids({sid})
 
     def edit_server(self) -> None:
         sid = self.selected_id()
@@ -484,7 +491,7 @@ class App:
             return
         self.entries[idx] = dlg.result
         self.save_entries()
-        self.refresh(False)
+        self.refresh_ids({new_sid})
 
     def delete_server(self) -> None:
         sid = self.selected_id()
@@ -495,7 +502,7 @@ class App:
             return
         self.entries = [e for e in self.entries if str(e.get("id")) != sid]
         self.save_entries()
-        self.refresh(False)
+        self.refresh_all(False)
 
     def interval_ms(self) -> int | None:
         label = self.var_interval.get()
@@ -512,7 +519,7 @@ class App:
             self.refresh_job = None
         ms = self.interval_ms()
         if ms:
-            self.refresh_job = self.root.after(ms, lambda: self.refresh(True))
+            self.refresh_job = self.root.after(ms, lambda: self.refresh_all(True))
 
     def find_entry_by_id(self, sid: str) -> dict | None:
         found = self.find_entry(sid)
@@ -647,18 +654,77 @@ class App:
         self.last_rows = rows
         self.status.configure(text=f"上次刷新：{datetime.now().strftime('%H:%M:%S')}")
 
-    def refresh(self, from_timer: bool) -> None:
+    def refresh_selected(self, from_timer: bool) -> None:
+        """仅刷新当前选中行对应的服务器。"""
+        sid = self.selected_id()
+        if not sid:
+            messagebox.showinfo("提示", "请先选中一行")
+            return
+        self._run_refresh(from_timer, restore_selection=sid, only_ids={sid})
+
+    def refresh_all(self, from_timer: bool) -> None:
+        """刷新配置中的全部服务器。"""
+        self._run_refresh(from_timer, restore_selection=None, only_ids=None)
+
+    def refresh_ids(self, ids: set[str]) -> None:
+        """按 ID 拉取（不校验选中）；用于新增/编辑保存后只更新对应行。"""
+        if not ids:
+            return
+        self._run_refresh(False, restore_selection=next(iter(ids)), only_ids=set(ids))
+
+    def _run_refresh(
+        self,
+        from_timer: bool,
+        *,
+        restore_selection: str | None,
+        only_ids: set[str] | None,
+    ) -> None:
         if self.refreshing:
             return
         self.load_entries()
+        all_ids = {str(e.get("id") or "unknown") for e in self.entries if isinstance(e, dict)}
+        if only_ids is None:
+            ids_set = all_ids
+            full = True
+        else:
+            ids_set = set(only_ids)
+            full = bool(all_ids) and ids_set == all_ids
+
         self.refreshing = True
         self.btn_refresh.configure(state="disabled")
+        self.btn_refresh_all.configure(state="disabled")
         self.status.configure(text="正在拉取…")
 
         def work():
             try:
                 dirty_apply = apply_billing_period_anchor_resets(self.entries)
-                rows, dirty_collect = collect_rows(self.entries)
+                if full:
+                    rows, dirty_collect = collect_rows(self.entries)
+                else:
+                    refreshed: dict[str, ServerRow] = {}
+                    dirty_collect = False
+                    for entry in self.entries:
+                        if not isinstance(entry, dict):
+                            continue
+                        sid = str(entry.get("id") or "unknown")
+                        if sid in ids_set:
+                            r, d = collect_one_row(entry)
+                            dirty_collect = dirty_collect or d
+                            refreshed[sid] = r
+                    prev = {r.id: r for r in self.last_rows} if self.last_rows else {}
+                    rows = []
+                    for entry in self.entries:
+                        if not isinstance(entry, dict):
+                            continue
+                        sid = str(entry.get("id") or "unknown")
+                        if sid in refreshed:
+                            rows.append(refreshed[sid])
+                        elif sid in prev:
+                            rows.append(prev[sid])
+                        else:
+                            r, d = collect_one_row(entry)
+                            dirty_collect = dirty_collect or d
+                            rows.append(r)
                 if dirty_apply or dirty_collect:
                     save_servers(self.path, self.entries)
             except Exception as ex:
@@ -669,6 +735,7 @@ class App:
         def done(rows: list[ServerRow] | None, e: Exception | None):
             self.refreshing = False
             self.btn_refresh.configure(state="normal")
+            self.btn_refresh_all.configure(state="normal")
             if e:
                 self.status.configure(text="失败")
                 if not from_timer:
@@ -676,6 +743,8 @@ class App:
             else:
                 assert rows is not None
                 self.render_rows(rows)
+                if restore_selection:
+                    self._select_tree_row_by_id(restore_selection)
             self.schedule_refresh()
 
         threading.Thread(target=work, daemon=True).start()
