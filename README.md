@@ -23,6 +23,7 @@ python app_gui.py
 ## 配置说明
 
 - GUI 顶部支持：**新增 / 编辑 / 删除 / 测试连接 / 自动刷新（1/5/10 分钟）**。
+- **表头列顺序**：先点击某一列表头选中列，再用表格右侧 **「上移 / 下移」** 调整列的显示顺序；会写入与程序同目录的 **`column_order.json`**（可删之恢复默认顺序）。
 - **GB 进制**：在 **新增/编辑** 对话框里为 **每台服务器** 选择 **「GB: 1024³」** 或 **「GB: 1000³」**，写入 `servers.yaml` 该项的 **`gb_base`**（`1024` 或 `1000`）；影响列表「已用/套餐」及「月流量上限 / 面板已用」的 GB 与字节换算。未写时默认 **1024**。
 - **`type: bandwagon`**：`veid`、`api_key`（KiwiVM 面板）。
 - **`type: ssh_vnstat`**：`host`、`private_key_path`（Windows 路径用双反斜杠或引号）、`interface`（如 eth0/ens3）。**月流量上限在界面里按 GB 填写**；保存到 `servers.yaml` 时写入 **`monthly_quota_bytes`**（按当前所选 GB 进制换算）。
