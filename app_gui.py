@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import threading
 from dataclasses import replace
@@ -39,7 +38,7 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-# Treeview 列 id（与 values 插入顺序一致）；显示顺序由 displaycolumns 控制
+# Treeview 列 id（与 values 插入顺序一致）
 TABLE_COLUMNS: tuple[str, ...] = (
     "id",
     "name",
@@ -50,7 +49,6 @@ TABLE_COLUMNS: tuple[str, ...] = (
     "forecast",
     "daysleft",
     "state",
-    "vnraw",
     "note",
 )
 COLUMN_HEADINGS: dict[str, str] = {
@@ -63,7 +61,6 @@ COLUMN_HEADINGS: dict[str, str] = {
     "forecast": "预计当月用量",
     "daysleft": "距离重置日",
     "state": "状态",
-    "vnraw": "vnstat当月总量(GB)",
     "note": "备注/错误",
 }
 COLUMN_WIDTHS: dict[str, int] = {
@@ -76,8 +73,7 @@ COLUMN_WIDTHS: dict[str, int] = {
     "forecast": 150,
     "daysleft": 90,
     "state": 60,
-    "vnraw": 150,
-    "note": 160,
+    "note": 220,
 }
 
 
@@ -308,12 +304,10 @@ class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.path = app_dir() / "servers.yaml"
-        self._column_order_path = app_dir() / "column_order.json"
         self.entries: list[dict] = []
         self.refresh_job: str | None = None
         self.refreshing = False
         self.last_rows: list[ServerRow] | None = None
-        self._column_move_target: str | None = "vnraw"
 
         root.title("VPS 流量汇总")
         root.geometry("1020x500")
@@ -329,18 +323,18 @@ class App:
         ttk.Button(top, text="删除", command=self.delete_server).pack(side=tk.LEFT, padx=5)
         ttk.Button(top, text="测试连接", command=self.test_selected).pack(side=tk.LEFT, padx=5)
         ttk.Separator(top, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
-        ttk.Label(top, text="调列:").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Label(top, text="调序:").pack(side=tk.LEFT, padx=(0, 2))
         ttk.Button(
             top,
-            text="列上移",
+            text="行上移",
             width=6,
-            command=lambda: self._move_selected_column(-1),
+            command=lambda: self._move_selected_row(-1),
         ).pack(side=tk.LEFT, padx=2)
         ttk.Button(
             top,
-            text="列下移",
+            text="行下移",
             width=6,
-            command=lambda: self._move_selected_column(1),
+            command=lambda: self._move_selected_row(1),
         ).pack(side=tk.LEFT, padx=2)
 
         ttk.Label(top, text="自动刷新").pack(side=tk.LEFT, padx=(18, 4))
@@ -366,7 +360,6 @@ class App:
             columns=TABLE_COLUMNS,
             show="headings",
             height=16,
-            displaycolumns=self._load_column_display_order(),
         )
         for c in TABLE_COLUMNS:
             self.tree.heading(c, text=COLUMN_HEADINGS[c])
@@ -380,105 +373,48 @@ class App:
         scroll = ttk.Scrollbar(mid, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
 
-        # grid：表格 + 滚动条（列顺序仅保留顶部「列上移 / 列下移」）
+        # grid：表格 + 滚动条
         mid.grid_columnconfigure(0, weight=1, minsize=360)
         mid.grid_columnconfigure(1, weight=0)
         mid.grid_rowconfigure(0, weight=1)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
 
-        self.tree.bind("<ButtonRelease-1>", self._on_tree_heading_release)
-
         self.load_entries()
         self.refresh(False)
 
-    def _load_column_display_order(self) -> tuple[str, ...]:
-        path = self._column_order_path
-        if not path.is_file():
-            return TABLE_COLUMNS
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            return TABLE_COLUMNS
-        if not isinstance(raw, list):
-            return TABLE_COLUMNS
-        seen: set[str] = set()
-        out: list[str] = []
-        for x in raw:
-            s = str(x)
-            if s in TABLE_COLUMNS and s not in seen:
-                out.append(s)
-                seen.add(s)
-        for c in TABLE_COLUMNS:
-            if c not in seen:
-                out.append(c)
-        if set(out) != set(TABLE_COLUMNS):
-            return TABLE_COLUMNS
-        return tuple(out)
-
-    def _save_column_display_order(self, order: tuple[str, ...]) -> None:
-        try:
-            self._column_order_path.write_text(
-                json.dumps(list(order), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
-
-    def _display_column_list(self) -> list[str]:
-        disp = self.tree.cget("displaycolumns")
-        if disp in (None, "", "#all"):
-            return list(TABLE_COLUMNS)
-        if isinstance(disp, (list, tuple)):
-            return [str(x) for x in disp]
-        if isinstance(disp, str):
-            s = disp.strip()
-            if s == "#all":
-                return list(TABLE_COLUMNS)
-            parts = s.split()
-            return parts if parts else list(TABLE_COLUMNS)
-        return list(TABLE_COLUMNS)
-
-    def _resolve_heading_column_id(self, event_x: int) -> str | None:
-        cid = self.tree.identify_column(event_x)
-        if not cid:
-            return None
-        if cid.startswith("#"):
-            try:
-                idx = int(cid[1:]) - 1
-            except ValueError:
-                return None
-            cols = self._display_column_list()
-            if 0 <= idx < len(cols):
-                return cols[idx]
-            return None
-        if cid in TABLE_COLUMNS:
-            return cid
-        return None
-
-    def _on_tree_heading_release(self, event: tk.Event) -> None:
-        if self.tree.identify_region(event.x, event.y) != "heading":
+    def _move_selected_row(self, delta: int) -> None:
+        """在 servers.yaml 中调整服务器顺序（整行一起移动），并立即重绘列表。"""
+        sid = self.selected_id()
+        if not sid:
+            messagebox.showinfo("提示", "请先选中一行")
             return
-        cid = self._resolve_heading_column_id(event.x)
-        if cid:
-            self._column_move_target = cid
-
-    def _move_selected_column(self, delta: int) -> None:
-        col = self._column_move_target
-        if not col or col not in TABLE_COLUMNS:
-            messagebox.showinfo("提示", "请先点击表头某一列，再使用上移/下移。")
+        found = self.find_entry(sid)
+        if not found:
             return
-        cur = self._display_column_list()
-        if col not in cur:
-            cur = list(TABLE_COLUMNS)
-        i = cur.index(col)
+        i, _ = found
         j = i + delta
-        if j < 0 or j >= len(cur):
+        if j < 0 or j >= len(self.entries):
             return
-        cur[i], cur[j] = cur[j], cur[i]
-        new_order = tuple(cur)
-        self.tree.configure(displaycolumns=new_order)
-        self._save_column_display_order(new_order)
+        self.entries[i], self.entries[j] = self.entries[j], self.entries[i]
+        self.save_entries()
+        if self.last_rows:
+            order = [str(e.get("id")) for e in self.entries]
+            row_map = {r.id: r for r in self.last_rows}
+            new_rows = [row_map[s] for s in order if s in row_map]
+            self.render_rows(new_rows)
+            self._select_tree_row_by_id(sid)
+        else:
+            self.refresh(False)
+
+    def _select_tree_row_by_id(self, sid: str) -> None:
+        for item in self.tree.get_children():
+            vals = self.tree.item(item, "values")
+            if vals and str(vals[0]) == sid:
+                self.tree.selection_set(item)
+                self.tree.focus(item)
+                self.tree.see(item)
+                break
 
     def load_entries(self) -> None:
         if self.path.is_file():
@@ -675,7 +611,6 @@ class App:
         for r in rows:
             used = fmt_gb(r.used_bytes, gb_base=r.gb_base, decimals=1)
             quota = fmt_gb(r.quota_bytes, gb_base=r.gb_base, decimals=1)
-            vnraw = fmt_gb(r.raw_used_bytes, gb_base=r.gb_base, decimals=1)
             pct = f"{r.used_percent:.1f}%" if r.used_percent is not None else "—"
             entry = self.find_entry_by_id(r.id)
             used_days = self._calc_used_days(entry)
@@ -707,7 +642,7 @@ class App:
             self.tree.insert(
                 "",
                 tk.END,
-                values=(r.id, r.name, used, pct, quota, avgday, forecast, days_left_text, state, vnraw, note[:220]),
+                values=(r.id, r.name, used, pct, quota, avgday, forecast, days_left_text, state, note[:220]),
             )
         self.last_rows = rows
         self.status.configure(text=f"上次刷新：{datetime.now().strftime('%H:%M:%S')}")
