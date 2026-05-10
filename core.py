@@ -133,9 +133,17 @@ def apply_ssh_billing_cycle_to_row(
     dirty = False
 
     if entry.get("billing_cycle_needs_baseline"):
-        entry["billing_cycle_baseline_used_bytes"] = logical
         entry.pop("billing_cycle_needs_baseline", None)
-        logical_adj = 0
+        quota_b = row.quota_bytes
+        # 晚几天才刷新时：若 vnstat 已与计费月对齐，logical 通常已是「本周期累计」且 ≤ 套餐；
+        # 此时不写基线，避免下一次刷新变成 (logical−baseline) 的「增量」而严重低估。
+        # 若 logical 仍异常大（常见为 vnstat 仍卡在上一自然月），则写基线并从 0 起算增量。
+        # 未配置套餐字节时：一律按「可信累计」展示，勿走基线置零分支。
+        if not quota_b or quota_b <= 0 or logical <= quota_b:
+            logical_adj = logical
+        else:
+            entry["billing_cycle_baseline_used_bytes"] = logical
+            logical_adj = 0
         dirty = True
     else:
         br = entry.get("billing_cycle_baseline_used_bytes")
@@ -296,11 +304,10 @@ def _vnstat_pick_current_month_row(months: list[Any]) -> dict[str, Any] | None:
     return candidates[0]
 
 
-def _vnstat_month_bytes(payload: dict[str, Any], iface: str) -> tuple[int | None, str | None]:
+def _vnstat_select_interface(payload: dict[str, Any], iface: str) -> tuple[dict[str, Any] | None, str | None]:
     ifaces = payload.get("interfaces")
     if not isinstance(ifaces, list) or not ifaces:
         return None, "JSON 中无 interfaces"
-
     selected = None
     for it in ifaces:
         if not isinstance(it, dict):
@@ -313,6 +320,67 @@ def _vnstat_month_bytes(payload: dict[str, Any], iface: str) -> tuple[int | None
         selected = ifaces[0] if isinstance(ifaces[0], dict) else None
     if selected is None:
         return None, "无法选择网卡"
+    return selected, None
+
+
+def _vnstat_sum_daily_bytes_in_range(
+    payload: dict[str, Any],
+    iface: str,
+    start: date,
+    end: date,
+) -> int | None:
+    """解析 ``vnstat --json d`` 结果，汇总 ``[start, end]``（含端点）各天的 rx+tx。
+
+    若无法解析日列表则返回 ``None``（由调用方回退到按月统计）。
+    """
+    selected, _ = _vnstat_select_interface(payload, iface)
+    if selected is None:
+        return None
+    traffic = selected.get("traffic") or {}
+    days = traffic.get("days") or traffic.get("day")
+    if not isinstance(days, list) or not days:
+        return None
+    ver = str(payload.get("vnstatversion") or "").strip()
+    v1 = ver.startswith("1.")
+    total = 0
+    matched = False
+    for row in days:
+        if not isinstance(row, dict):
+            continue
+        d = row.get("date")
+        if not isinstance(d, dict):
+            continue
+        try:
+            y = int(d.get("year") or 0)
+            mo = int(d.get("month") or 0)
+            da = int(d.get("day") or 0)
+        except (TypeError, ValueError):
+            continue
+        if y <= 0 or mo <= 0 or da <= 0:
+            continue
+        try:
+            di = date(y, mo, da)
+        except ValueError:
+            continue
+        if di < start or di > end:
+            continue
+        matched = True
+        rx = int(row.get("rx") or 0)
+        tx = int(row.get("tx") or 0)
+        if v1:
+            rx *= 1024
+            tx *= 1024
+        total += rx + tx
+    if not matched:
+        # 有日表但无一行落入区间：不按 0 覆盖（可能为版本/区间问题），回退按月统计
+        return None
+    return total
+
+
+def _vnstat_month_bytes(payload: dict[str, Any], iface: str) -> tuple[int | None, str | None]:
+    selected, perr = _vnstat_select_interface(payload, iface)
+    if selected is None:
+        return None, perr or "无法选择网卡"
 
     traffic = selected.get("traffic") or {}
     months = traffic.get("months") or traffic.get("month")
@@ -335,20 +403,7 @@ def _vnstat_month_bytes(payload: dict[str, Any], iface: str) -> tuple[int | None
 
 
 def _vnstat_updated_text(payload: dict[str, Any], iface: str) -> str | None:
-    ifaces = payload.get("interfaces")
-    if not isinstance(ifaces, list) or not ifaces:
-        return None
-
-    selected = None
-    for it in ifaces:
-        if not isinstance(it, dict):
-            continue
-        name = it.get("name") or it.get("id")
-        if name == iface:
-            selected = it
-            break
-    if selected is None:
-        selected = ifaces[0] if isinstance(ifaces[0], dict) else None
+    selected, _ = _vnstat_select_interface(payload, iface)
     if not isinstance(selected, dict):
         return None
 
@@ -406,45 +461,44 @@ def fetch_ssh_vnstat(entry: dict[str, Any]) -> ServerRow:
             detail=f"iface={iface}",
         )
 
-    cmd = f"vnstat -i {shlex.quote(iface)} --json m"
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        key_file = (
-            str(Path(key_path).expanduser())
-            if key_path and Path(key_path).expanduser().is_file()
-            else None
+    cmd_m = f"vnstat -i {shlex.quote(iface)} --json m"
+    key_file = (
+        str(Path(key_path).expanduser())
+        if key_path and Path(key_path).expanduser().is_file()
+        else None
+    )
+    kwargs: dict[str, Any] = {
+        "hostname": host,
+        "port": port,
+        "username": user,
+        "timeout": 25,
+        "banner_timeout": 20,
+    }
+    if key_file:
+        kwargs["key_filename"] = key_file
+    if password:
+        kwargs["password"] = password
+    if not key_file and not password:
+        return ServerRow(
+            id=sid,
+            name=name,
+            type="ssh_vnstat",
+            ok=False,
+            error="需配置 private_key_path 或 password",
+            used_bytes=None,
+            quota_bytes=quota_i,
+            used_percent=None,
+            reset_unix=None,
+            detail=f"iface={iface}",
         )
-        kwargs: dict[str, Any] = {
-            "hostname": host,
-            "port": port,
-            "username": user,
-            "timeout": 25,
-            "banner_timeout": 20,
-        }
-        if key_file:
-            kwargs["key_filename"] = key_file
-        if password:
-            kwargs["password"] = password
-        if not key_file and not password:
-            return ServerRow(
-                id=sid,
-                name=name,
-                type="ssh_vnstat",
-                ok=False,
-                error="需配置 private_key_path 或 password",
-                used_bytes=None,
-                quota_bytes=quota_i,
-                used_percent=None,
-                reset_unix=None,
-                detail=f"iface={iface}",
-            )
 
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
         client.connect(**kwargs)
-        _, stdout, stderr = client.exec_command(cmd)
+        _, stdout, stderr = client.exec_command(cmd_m)
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
-        client.close()
         if err.strip() and not out.strip():
             return ServerRow(
                 id=sid,
@@ -459,6 +513,66 @@ def fetch_ssh_vnstat(entry: dict[str, Any]) -> ServerRow:
                 detail=f"iface={iface}",
             )
         payload = json.loads(out)
+        used, perr = _vnstat_month_bytes(payload, iface)
+        if used is None:
+            return ServerRow(
+                id=sid,
+                name=name,
+                type="ssh_vnstat",
+                ok=False,
+                error=perr or "解析失败",
+                used_bytes=None,
+                quota_bytes=quota_i,
+                used_percent=None,
+                reset_unix=None,
+                detail=f"iface={iface}",
+            )
+
+        traffic_src = "月"
+        rd = _billing_reset_day_int(entry)
+        if rd is not None:
+            period_start = billing_cycle_start_date(date.today(), rd)
+            if period_start is not None:
+                cmd_d = (
+                    f"vnstat -i {shlex.quote(iface)} --json d "
+                    f"--begin {period_start.isoformat()} --end {date.today().isoformat()}"
+                )
+                _, so2, se2 = client.exec_command(cmd_d)
+                o2 = so2.read().decode("utf-8", errors="replace")
+                e2 = se2.read().decode("utf-8", errors="replace")
+                if o2.strip() and not (e2.strip() and not o2.strip()):
+                    try:
+                        p2 = json.loads(o2)
+                        day_sum = _vnstat_sum_daily_bytes_in_range(
+                            p2, iface, period_start, date.today()
+                        )
+                        if day_sum is not None:
+                            used = day_sum
+                            traffic_src = "日账期"
+                    except (json.JSONDecodeError, ValueError, TypeError, KeyError):
+                        pass
+
+        pct = (used / quota_i * 100.0) if quota_i and quota_i > 0 else None
+        reset_day = entry.get("billing_reset_day")
+        detail = f"iface={iface}({traffic_src})"
+        updated = _vnstat_updated_text(payload, iface)
+        if updated:
+            detail += f", 更新={updated}"
+        if reset_day is not None:
+            detail += f", 重置≈{reset_day}号"
+
+        return ServerRow(
+            id=sid,
+            name=name,
+            type="ssh_vnstat",
+            ok=True,
+            error=None,
+            used_bytes=used,
+            quota_bytes=quota_i,
+            used_percent=round(pct, 2) if pct is not None else None,
+            reset_unix=None,
+            detail=detail,
+        )
     except Exception as e:
         return ServerRow(
             id=sid,
@@ -472,43 +586,11 @@ def fetch_ssh_vnstat(entry: dict[str, Any]) -> ServerRow:
             reset_unix=None,
             detail=f"iface={iface}",
         )
-
-    used, perr = _vnstat_month_bytes(payload, iface)
-    if used is None:
-        return ServerRow(
-            id=sid,
-            name=name,
-            type="ssh_vnstat",
-            ok=False,
-            error=perr or "解析失败",
-            used_bytes=None,
-            quota_bytes=quota_i,
-            used_percent=None,
-            reset_unix=None,
-            detail=f"iface={iface}",
-        )
-
-    pct = (used / quota_i * 100.0) if quota_i and quota_i > 0 else None
-    reset_day = entry.get("billing_reset_day")
-    detail = f"iface={iface}"
-    updated = _vnstat_updated_text(payload, iface)
-    if updated:
-        detail += f", 更新={updated}"
-    if reset_day is not None:
-        detail += f", 重置≈{reset_day}号"
-
-    return ServerRow(
-        id=sid,
-        name=name,
-        type="ssh_vnstat",
-        ok=True,
-        error=None,
-        used_bytes=used,
-        quota_bytes=quota_i,
-        used_percent=round(pct, 2) if pct is not None else None,
-        reset_unix=None,
-        detail=detail,
-    )
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def apply_used_offset(row: ServerRow, entry: dict[str, Any]) -> ServerRow:

@@ -48,7 +48,9 @@ python app_gui.py
 - 首次出现该逻辑时只会写入 **`billing_period_id`**，**不会**清空你已有的对齐数据。
 - **vnstat 侧**：请仍让 VPS 上 **`/etc/vnstat.conf` 的 `MonthRotate`** 与 **`billing_reset_day`** 一致，否则跨重置日后 vnstat 的「当月」可能仍按自然月，与商家计费月不一致；本功能只负责清面板锚点，不改变 vnstat 自身口径。
 
-- **日均 / 预计用量**：界面里「已用天数」按 **`billing_reset_day`** 算，已进入新计费周期；若 vnstat 仍返回**上一周期的大累计**，会出现「已用」仍上千 GB、天数只有 3 天 → 日均/预计异常放大。程序在**跨周期**时会置 **`billing_cycle_needs_baseline`**，在**下一次成功拉取**时用当时的**逻辑已用**（对齐面板后的值）写入 **`billing_cycle_baseline_used_bytes`**，并把本行「已用」置为 **0** 起算；之后「已用」= 当前逻辑已用 − 该基线，与「已用天数」一致。若你希望「已用」与 vnstat 原始月总量完全一致，请把远端 **`MonthRotate`** 配成与 **`billing_reset_day`** 相同，使 vnstat 在新周期自然归零。
+- **日均 / 预计用量**：界面里「已用天数」按 **`billing_reset_day`** 算，已进入新计费周期；若 vnstat 仍返回**上一周期的大累计**，会出现「已用」仍上千 GB、天数只有 3 天 → 日均/预计异常放大。程序在**跨周期**时会置 **`billing_cycle_needs_baseline`**；**下一次成功拉取**时：若当前逻辑已用 **不超过套餐字节**（视为 vnstat 已是本周期合理累计，含你**过数日才刷新**的情况），则**不写基线**，界面直接显示该累计；若仍异常大于套餐，则写入 **`billing_cycle_baseline_used_bytes`** 并从 **0** 起按增量显示（适配 vnstat 未按计费月切分时）。仍建议把远端 **`MonthRotate`** 配成与 **`billing_reset_day`** 一致。
+
+- **已用（主界面）与「晚很多天才刷新」**：配置了 **`billing_reset_day`** 时，除按月 JSON 外，程序会再执行一次 **`vnstat --json d --begin 本账期起点 --end 今天`**，把**该日期区间内各天 rx+tx 相加**作为「已用」的主要来源（备注里会显示 ``日账期``）。这样即使重置日过去很多天才刷新，也能对齐**本账期自然日累计**（仍受远端 **`DailyDays`** 等保留策略限制；日数据被裁掉时自动回退按月 JSON）。**未配置** ``billing_reset_day`` 时行为与旧版相同，只用按月数据。
 
 ## 系统要求
 
