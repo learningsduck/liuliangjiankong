@@ -328,6 +328,20 @@ class App:
         ttk.Button(top, text="编辑", command=self.edit_server).pack(side=tk.LEFT, padx=5)
         ttk.Button(top, text="删除", command=self.delete_server).pack(side=tk.LEFT, padx=5)
         ttk.Button(top, text="测试连接", command=self.test_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Separator(top, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
+        ttk.Label(top, text="调列:").pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(
+            top,
+            text="列上移",
+            width=6,
+            command=lambda: self._move_selected_column(-1),
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            top,
+            text="列下移",
+            width=6,
+            command=lambda: self._move_selected_column(1),
+        ).pack(side=tk.LEFT, padx=2)
 
         ttk.Label(top, text="自动刷新").pack(side=tk.LEFT, padx=(18, 4))
         self.var_interval = tk.StringVar(value="关闭")
@@ -366,10 +380,14 @@ class App:
         scroll = ttk.Scrollbar(mid, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
 
-        # 最右为滚动条；左侧为「列顺序」上移/下移；表格填充剩余空间（vnstat 列在表内，控制条在其右）
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        # grid：避免 Windows 下 pack 顺序导致右侧「列顺序」条被挤没；表 | 控制条 | 滚动条
+        mid.grid_columnconfigure(0, weight=1, minsize=360)
+        mid.grid_columnconfigure(1, weight=0, minsize=76)
+        mid.grid_rowconfigure(0, weight=1)
+        self.tree.grid(row=0, column=0, sticky="nsew")
         colctrl = ttk.Frame(mid, padding=(4, 0))
-        colctrl.pack(side=tk.RIGHT, fill=tk.Y)
+        colctrl.grid(row=0, column=1, sticky="ns")
+        scroll.grid(row=0, column=2, sticky="ns")
         ttk.Label(colctrl, text="列顺序").pack(anchor=tk.CENTER, pady=(0, 4))
         ttk.Button(
             colctrl,
@@ -401,7 +419,6 @@ class App:
             foreground="gray",
         ).pack(anchor=tk.CENTER, pady=(4, 0))
 
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.tree.bind("<ButtonRelease-1>", self._on_tree_heading_release)
 
         self.load_entries()
