@@ -380,44 +380,12 @@ class App:
         scroll = ttk.Scrollbar(mid, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
 
-        # grid：避免 Windows 下 pack 顺序导致右侧「列顺序」条被挤没；表 | 控制条 | 滚动条
+        # grid：表格 + 滚动条（列顺序仅保留顶部「列上移 / 列下移」）
         mid.grid_columnconfigure(0, weight=1, minsize=360)
-        mid.grid_columnconfigure(1, weight=0, minsize=76)
+        mid.grid_columnconfigure(1, weight=0)
         mid.grid_rowconfigure(0, weight=1)
         self.tree.grid(row=0, column=0, sticky="nsew")
-        colctrl = ttk.Frame(mid, padding=(4, 0))
-        colctrl.grid(row=0, column=1, sticky="ns")
-        scroll.grid(row=0, column=2, sticky="ns")
-        ttk.Label(colctrl, text="列顺序").pack(anchor=tk.CENTER, pady=(0, 4))
-        ttk.Button(
-            colctrl,
-            text="上移",
-            width=5,
-            command=lambda: self._move_selected_column(-1),
-        ).pack(fill=tk.X, pady=2)
-        ttk.Button(
-            colctrl,
-            text="下移",
-            width=5,
-            command=lambda: self._move_selected_column(1),
-        ).pack(fill=tk.X, pady=2)
-        self.var_col_sel = tk.StringVar(
-            value=COLUMN_HEADINGS.get(self._column_move_target or "", "vnstat当月总量(GB)")
-        )
-        ttk.Label(
-            colctrl,
-            textvariable=self.var_col_sel,
-            wraplength=72,
-            justify=tk.CENTER,
-            font=("TkDefaultFont", 8),
-        ).pack(anchor=tk.CENTER, pady=(8, 0))
-        ttk.Label(
-            colctrl,
-            text="先点击表头\n选中列",
-            justify=tk.CENTER,
-            font=("TkDefaultFont", 7),
-            foreground="gray",
-        ).pack(anchor=tk.CENTER, pady=(4, 0))
+        scroll.grid(row=0, column=1, sticky="ns")
 
         self.tree.bind("<ButtonRelease-1>", self._on_tree_heading_release)
 
@@ -494,7 +462,6 @@ class App:
         cid = self._resolve_heading_column_id(event.x)
         if cid:
             self._column_move_target = cid
-            self.var_col_sel.set(COLUMN_HEADINGS.get(cid, cid))
 
     def _move_selected_column(self, delta: int) -> None:
         col = self._column_move_target
