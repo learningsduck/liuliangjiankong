@@ -176,20 +176,13 @@ class ServerDialog:
         row += 1
         self._add_field(self.bwg_frame, "VEID", self.var_veid, 0)
         self._add_field(self.bwg_frame, "API Key", self.var_api, 1)
-        self._add_field(self.bwg_frame, "面板已用(GB)", self.var_panel_used, 2)
-        self._add_field(self.bwg_frame, "重置日(可选)", self.var_reset, 3)
+        self._add_field(self.bwg_frame, "重置日(可选)", self.var_reset, 2)
         ttk.Label(
             self.bwg_frame,
             text="与计费周期对齐的每月重置日(1–31)；主页「日均/预计/距离重置日」按此推算。留空则按自然月。",
             font=("TkDefaultFont", 8),
             foreground="gray",
-        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=4)
-        ttk.Label(
-            self.bwg_frame,
-            text="若 API 已用与面板不一致，填面板「本月已用」后保存即可对齐。请先刷新列表。留空则不对齐。",
-            font=("TkDefaultFont", 8),
-            foreground="gray",
-        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=4)
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=4)
 
         btns = ttk.Frame(frm)
         btns.grid(row=row, column=0, columnspan=2, sticky="e", pady=(8, 0))
@@ -198,7 +191,8 @@ class ServerDialog:
 
         self.var_type.trace_add("write", lambda *_: self.update_visibility())
         self.update_visibility()
-        if current_used_bytes is not None:
+        init_type = str(self._initial.get("type", "")).lower()
+        if current_used_bytes is not None and init_type != "bandwagon":
             self.var_panel_used.set(
                 bytes_to_gb_str(current_used_bytes, gb_base=self._initial_gb)
             )
@@ -221,6 +215,7 @@ class ServerDialog:
         if t == "bandwagon":
             self.ssh_frame.grid_remove()
             self.bwg_frame.grid()
+            self.var_panel_used.set("")
         else:
             self.bwg_frame.grid_remove()
             self.ssh_frame.grid()
@@ -294,32 +289,37 @@ class ServerDialog:
         if not self.var_reset.get().strip():
             merged.pop("billing_reset_day", None)
 
-        panel_s = self.var_panel_used.get().strip()
-        if panel_s:
-            if self.current_raw_used_bytes is None:
-                messagebox.showwarning(
-                    "提示",
-                    "填写面板已用前请先在主页点「刷新」，成功拉取流量后再保存。",
-                    parent=self.win,
-                )
-                return
-            try:
-                panel_bytes = gb_to_bytes(panel_s, gb_base=gb_b)
-            except ValueError:
-                messagebox.showwarning(
-                    "提示",
-                    "面板已用请输入数字（GB），可为小数",
-                    parent=self.win,
-                )
-                return
-            merged["panel_anchor_used_bytes"] = int(panel_bytes)
-            merged["panel_anchor_raw_bytes"] = int(self.current_raw_used_bytes)
-            # 迁移到锚点模式后不再使用旧偏移字段
-            merged.pop("used_offset_bytes", None)
-        else:
+        if stype == "bandwagon":
             merged.pop("panel_anchor_used_bytes", None)
             merged.pop("panel_anchor_raw_bytes", None)
             merged.pop("used_offset_bytes", None)
+        else:
+            panel_s = self.var_panel_used.get().strip()
+            if panel_s:
+                if self.current_raw_used_bytes is None:
+                    messagebox.showwarning(
+                        "提示",
+                        "填写面板已用前请先在主页点「刷新」，成功拉取流量后再保存。",
+                        parent=self.win,
+                    )
+                    return
+                try:
+                    panel_bytes = gb_to_bytes(panel_s, gb_base=gb_b)
+                except ValueError:
+                    messagebox.showwarning(
+                        "提示",
+                        "面板已用请输入数字（GB），可为小数",
+                        parent=self.win,
+                    )
+                    return
+                merged["panel_anchor_used_bytes"] = int(panel_bytes)
+                merged["panel_anchor_raw_bytes"] = int(self.current_raw_used_bytes)
+                # 迁移到锚点模式后不再使用旧偏移字段
+                merged.pop("used_offset_bytes", None)
+            else:
+                merged.pop("panel_anchor_used_bytes", None)
+                merged.pop("panel_anchor_raw_bytes", None)
+                merged.pop("used_offset_bytes", None)
 
         self.result = merged
         self.win.destroy()
