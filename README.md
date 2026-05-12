@@ -25,7 +25,7 @@ python app_gui.py
 - GUI 顶部支持：**刷新（仅当前选中 ID）/ 全部刷新 / 新增 / 编辑 / 删除 / 测试连接 / 行上移·行下移（调列表顺序）/ 自动刷新（1/5/10 分钟，定时为全部刷新）**。
 - **列表行顺序**：先选中一行，再用顶部 **「行上移 / 行下移」** 调整服务器在列表（及 **`servers.yaml`**）中的先后顺序；不会重新拉取流量。若界面没有这些按钮，请 **`git pull`** 后重新运行 **`python app_gui.py`**，或重新执行 **`build_exe.bat`** 生成新版 exe。
 - **GB 进制**：在 **新增/编辑** 对话框里为 **每台服务器** 选择 **「GB: 1024³」** 或 **「GB: 1000³」**，写入 `servers.yaml` 该项的 **`gb_base`**（`1024` 或 `1000`）；影响列表「已用/套餐」及「月流量上限 / 面板已用」的 GB 与字节换算。未写时默认 **1024**。
-- **`type: bandwagon`**：`veid`、`api_key`（KiwiVM 面板）。
+- **`type: bandwagon`**：`veid`、`api_key`（KiwiVM 面板）。可选 **`billing_reset_day`**（1–31）：在编辑里填「重置日」后，主页 **日均 / 预计当月用量 / 距离重置日** 与 SSH 一样按该计费周期推算；未填则按**自然月**推算。跨计费周期时也会按该字段参与 **`billing_period_id`** 清锚点（与 ssh 一致）。
 - **`type: ssh_vnstat`**：`host`、`private_key_path`（Windows 路径用双反斜杠或引号）、`interface`（如 eth0/ens3）。**月流量上限在界面里按 GB 填写**；保存到 `servers.yaml` 时写入 **`monthly_quota_bytes`**（按当前所选 GB 进制换算）。
 - 各机 vnstat 计费月对齐：在服务器 `/etc/vnstat.conf` 设置 **`MonthRotate`**。
 

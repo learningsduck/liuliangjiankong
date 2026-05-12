@@ -118,7 +118,10 @@ def apply_ssh_billing_cycle_to_row(
     row: ServerRow,
     raw_vnstat: int | None,
 ) -> tuple[ServerRow, bool]:
-    """在 ``apply_used_offset`` 之后，按计费周期基线压缩 ssh 行的 ``used_bytes`` / ``used_percent``。
+    """在 ``apply_used_offset`` 之后，若配置了 ``billing_reset_day``，按计费周期基线调整 ``used_bytes`` / ``used_percent``。
+
+    用于 **ssh_vnstat**（vnstat 口径）与 **bandwagon**（API ``data_counter`` 口径）；跨周期清锚点后由
+    ``billing_cycle_needs_baseline`` 触发首次基线逻辑。
 
     返回 ``(新行, 是否写入了基线等配置)``。
     """
@@ -669,7 +672,8 @@ def collect_one_row(entry: dict[str, Any]) -> tuple[ServerRow, bool]:
         r = replace(r, id=sid, name=name, gb_base=entry_gb_base(entry))
         raw = r.used_bytes if r.ok else None
         r = apply_used_offset(r, entry)
-        return replace(r, raw_used_bytes=raw), False
+        r, sub_dirty = apply_ssh_billing_cycle_to_row(entry, r, raw)
+        return r, sub_dirty
 
     if stype in ("ssh_vnstat", "vnstat_ssh"):
         r = fetch_ssh_vnstat(entry)

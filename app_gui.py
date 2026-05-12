@@ -177,12 +177,19 @@ class ServerDialog:
         self._add_field(self.bwg_frame, "VEID", self.var_veid, 0)
         self._add_field(self.bwg_frame, "API Key", self.var_api, 1)
         self._add_field(self.bwg_frame, "面板已用(GB)", self.var_panel_used, 2)
+        self._add_field(self.bwg_frame, "重置日(可选)", self.var_reset, 3)
+        ttk.Label(
+            self.bwg_frame,
+            text="与计费周期对齐的每月重置日(1–31)；主页「日均/预计/距离重置日」按此推算。留空则按自然月。",
+            font=("TkDefaultFont", 8),
+            foreground="gray",
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=4)
         ttk.Label(
             self.bwg_frame,
             text="若 API 已用与面板不一致，填面板「本月已用」后保存即可对齐。请先刷新列表。留空则不对齐。",
             font=("TkDefaultFont", 8),
             foreground="gray",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=4)
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=4)
 
         btns = ttk.Frame(frm)
         btns.grid(row=row, column=0, columnspan=2, sticky="e", pady=(8, 0))
@@ -237,6 +244,21 @@ class ServerDialog:
                 messagebox.showwarning("提示", "bandwagon 需要 veid 和 api_key", parent=self.win)
                 return
             entry.update({"veid": veid, "api_key": api_key})
+            reset = self.var_reset.get().strip()
+            if reset:
+                try:
+                    rd = int(reset)
+                except ValueError:
+                    messagebox.showwarning(
+                        "提示",
+                        "重置日请输入 1–31 的整数，或留空",
+                        parent=self.win,
+                    )
+                    return
+                if rd < 1 or rd > 31:
+                    messagebox.showwarning("提示", "重置日须在 1–31 之间", parent=self.win)
+                    return
+                entry["billing_reset_day"] = rd
         else:
             host = self.var_host.get().strip()
             if not host:
@@ -269,6 +291,8 @@ class ServerDialog:
         gb_b = self.dialog_gb_base()
         entry["gb_base"] = gb_b
         merged: dict[str, object] = {**self._initial, **entry}
+        if not self.var_reset.get().strip():
+            merged.pop("billing_reset_day", None)
 
         panel_s = self.var_panel_used.get().strip()
         if panel_s:
